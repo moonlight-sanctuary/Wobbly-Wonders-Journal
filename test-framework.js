@@ -1449,3 +1449,459 @@ console.log('   • Responsive floating button');
 console.log('   • Entry title management');
 console.log('   • AI status indicators');
 console.log('   • Complete integration workflow');
+
+//
+ Template Manager Tests
+tf.addTest('Template Manager Initialized', async () => {
+    const app = window.journal;
+    return {
+        pass: app.templateManager !== null && app.templateManager !== undefined,
+        message: app.templateManager ? 'Template manager initialized' : 'Template manager not found'
+    };
+}, 'template-manager');
+
+tf.addTest('Default Templates Loaded', async () => {
+    const app = window.journal;
+    const defaultTemplates = app.templateManager.defaultTemplates;
+    
+    return {
+        pass: defaultTemplates.length === 2 && 
+              defaultTemplates[0].id === 'default-six-fs' &&
+              defaultTemplates[1].id === 'default-checkin',
+        message: `Found ${defaultTemplates.length} default templates`
+    };
+}, 'template-manager');
+
+tf.addTest('Mark Entry as Template', async () => {
+    const app = window.journal;
+    
+    // Create a test entry
+    app.textarea.value = 'Test template content';
+    app.saveCurrentEntry();
+    await tf.waitForCondition(() => app.entries.length > 0, 1000);
+    
+    const entryId = app.entries[0].id;
+    const result = app.templateManager.markAsTemplate(entryId);
+    
+    const entry = app.entries.find(e => e.id === entryId);
+    
+    return {
+        pass: result === true && entry.isTemplate === true && entry.templateOrder !== null,
+        message: result ? 'Entry marked as template successfully' : 'Failed to mark entry as template'
+    };
+}, 'template-manager');
+
+tf.addTest('Unmark Entry as Template', async () => {
+    const app = window.journal;
+    
+    // Find a template entry
+    const templateEntry = app.entries.find(e => e.isTemplate === true);
+    if (!templateEntry) {
+        return { pass: false, message: 'No template entry found for test' };
+    }
+    
+    const result = app.templateManager.unmarkAsTemplate(templateEntry.id);
+    const entry = app.entries.find(e => e.id === templateEntry.id);
+    
+    return {
+        pass: result === true && entry.isTemplate === false && entry.templateOrder === null,
+        message: result ? 'Template unmarked successfully' : 'Failed to unmark template'
+    };
+}, 'template-manager');
+
+tf.addTest('Template Limit Enforcement', async () => {
+    const app = window.journal;
+    
+    // Clear existing templates
+    app.entries.forEach(entry => {
+        if (entry.isTemplate) {
+            entry.isTemplate = false;
+            entry.templateOrder = null;
+        }
+    });
+    
+    // Create 5 test entries and mark them as templates
+    for (let i = 0; i < 5; i++) {
+        app.textarea.value = `Template ${i + 1}`;
+        app.saveCurrentEntry();
+        await tf.waitForCondition(() => app.entries.length > i, 1000);
+        app.templateManager.markAsTemplate(app.entries[i].id);
+    }
+    
+    // Try to add a 6th template
+    app.textarea.value = 'Template 6';
+    app.saveCurrentEntry();
+    await tf.waitForCondition(() => app.entries.length > 5, 1000);
+    
+    const canAddMore = app.templateManager.canAddMoreTemplates();
+    const result = app.templateManager.markAsTemplate(app.entries[5].id);
+    
+    return {
+        pass: canAddMore === false && result === false,
+        message: canAddMore ? 'Limit not enforced' : 'Template limit enforced correctly'
+    };
+}, 'template-manager');
+
+tf.addTest('Template Order Assignment', async () => {
+    const app = window.journal;
+    
+    const templates = app.templateManager.getTemplateEntries();
+    const orders = templates.map(t => t.templateOrder);
+    const uniqueOrders = new Set(orders);
+    
+    return {
+        pass: orders.length === uniqueOrders.size && orders.every(o => o >= 0 && o < 5),
+        message: `Template orders: ${orders.join(', ')}`
+    };
+}, 'template-manager');
+
+// Template Creation Tests
+tf.addTest('Create Entry from Default Template', async () => {
+    const app = window.journal;
+    
+    const initialContent = app.textarea.value;
+    app.templateManager.createEntryFromTemplate('default-six-fs');
+    
+    await tf.waitForCondition(() => app.textarea.value !== initialContent, 1000);
+    
+    return {
+        pass: app.textarea.value.includes('Six F\'s Reflection') && 
+              app.textarea.value.includes('Facts') &&
+              app.currentEntryId === null,
+        message: 'Entry created from default template'
+    };
+}, 'template-creation');
+
+tf.addTest('Create Entry from Custom Template', async () => {
+    const app = window.journal;
+    
+    // Find a custom template
+    const customTemplate = app.entries.find(e => e.isTemplate === true);
+    if (!customTemplate) {
+        return { pass: false, message: 'No custom template found for test' };
+    }
+    
+    const templateContent = customTemplate.content;
+    app.templateManager.createEntryFromTemplate(customTemplate.id);
+    
+    await tf.waitForCondition(() => app.textarea.value === templateContent, 1000);
+    
+    return {
+        pass: app.textarea.value === templateContent && app.currentEntryId === null,
+        message: 'Entry created from custom template'
+    };
+}, 'template-creation');
+
+tf.addTest('Create Blank Entry', async () => {
+    const app = window.journal;
+    
+    app.textarea.value = 'Some content';
+    const newBtn = document.getElementById('newBtn');
+    newBtn.click();
+    
+    return {
+        pass: app.textarea.value === '' && app.currentEntryId === null,
+        message: 'Blank entry created successfully via New Entry button'
+    };
+}, 'template-creation');
+
+tf.addTest('Template Content Copied Correctly', async () => {
+    const app = window.journal;
+    
+    const template = app.templateManager.defaultTemplates[0];
+    app.templateManager.createEntryFromTemplate(template.id);
+    
+    await tf.waitForCondition(() => app.textarea.value === template.content, 1000);
+    
+    return {
+        pass: app.textarea.value === template.content,
+        message: 'Template content copied correctly'
+    };
+}, 'template-creation');
+
+tf.addTest('New Entry Not Marked as Template', async () => {
+    const app = window.journal;
+    
+    app.templateManager.createEntryFromTemplate('default-checkin');
+    await tf.waitForCondition(() => app.textarea.value.includes('Daily Check-in'), 1000);
+    
+    app.saveCurrentEntry();
+    await tf.waitForCondition(() => app.currentEntryId !== null, 1000);
+    
+    const newEntry = app.entries.find(e => e.id === app.currentEntryId);
+    
+    return {
+        pass: newEntry && newEntry.isTemplate === false,
+        message: newEntry ? 'New entry not marked as template' : 'Entry not found'
+    };
+}, 'template-creation');
+
+// Template Filtering Tests
+tf.addTest('Filter Shows Only Templates', async () => {
+    const app = window.journal;
+    
+    app.switchFilter('templates');
+    await tf.waitForCondition(() => app.currentFilter === 'templates', 500);
+    
+    const filteredEntries = app.getFilteredEntries();
+    const allAreTemplates = filteredEntries.every(e => e.isTemplate === true);
+    
+    return {
+        pass: allAreTemplates,
+        message: `Filtered ${filteredEntries.length} entries, all templates: ${allAreTemplates}`
+    };
+}, 'template-filtering');
+
+tf.addTest('Filter Shows All Entries', async () => {
+    const app = window.journal;
+    
+    app.switchFilter('all');
+    await tf.waitForCondition(() => app.currentFilter === 'all', 500);
+    
+    const filteredEntries = app.getFilteredEntries();
+    
+    return {
+        pass: filteredEntries.length === app.entries.length,
+        message: `Showing ${filteredEntries.length} of ${app.entries.length} entries`
+    };
+}, 'template-filtering');
+
+tf.addTest('Template Count Display', async () => {
+    const app = window.journal;
+    
+    const templateCount = app.templateManager.getTemplateEntries().length;
+    const displayElement = document.getElementById('templateCount');
+    
+    return {
+        pass: displayElement && displayElement.textContent === String(templateCount),
+        message: `Template count: ${templateCount}, Display: ${displayElement?.textContent}`
+    };
+}, 'template-filtering');
+
+tf.addTest('Empty State with Filters', async () => {
+    const app = window.journal;
+    
+    // Clear all templates
+    app.entries.forEach(entry => {
+        if (entry.isTemplate) {
+            entry.isTemplate = false;
+            entry.templateOrder = null;
+        }
+    });
+    
+    app.switchFilter('templates');
+    app.renderEntries();
+    
+    const emptyState = document.getElementById('emptyState');
+    const isVisible = emptyState && emptyState.style.display !== 'none';
+    const hasCorrectMessage = emptyState && emptyState.textContent.includes('No templates yet');
+    
+    return {
+        pass: isVisible && hasCorrectMessage,
+        message: isVisible ? 'Empty state shown correctly' : 'Empty state not shown'
+    };
+}, 'template-filtering');
+
+// Integration Tests
+tf.addTest('End-to-End Template Workflow', async () => {
+    const app = window.journal;
+    
+    // Create entry
+    app.createBlankEntry();
+    app.textarea.value = 'My custom template content';
+    app.saveCurrentEntry();
+    await tf.waitForCondition(() => app.currentEntryId !== null, 1000);
+    
+    const entryId = app.currentEntryId;
+    
+    // Mark as template
+    app.templateManager.markAsTemplate(entryId);
+    await tf.waitForCondition(() => {
+        const entry = app.entries.find(e => e.id === entryId);
+        return entry && entry.isTemplate === true;
+    }, 1000);
+    
+    // Create new entry from template
+    app.templateManager.createEntryFromTemplate(entryId);
+    await tf.waitForCondition(() => app.textarea.value === 'My custom template content', 1000);
+    
+    return {
+        pass: app.textarea.value === 'My custom template content' && app.currentEntryId === null,
+        message: 'End-to-end workflow completed successfully'
+    };
+}, 'template-integration');
+
+tf.addTest('Template Limit Workflow', async () => {
+    const app = window.journal;
+    
+    // Clear existing templates
+    app.entries.forEach(entry => {
+        if (entry.isTemplate) {
+            entry.isTemplate = false;
+            entry.templateOrder = null;
+        }
+    });
+    
+    // Mark 5 entries as templates
+    let markedCount = 0;
+    for (let i = 0; i < Math.min(5, app.entries.length); i++) {
+        if (app.templateManager.markAsTemplate(app.entries[i].id)) {
+            markedCount++;
+        }
+    }
+    
+    // Try to mark a 6th
+    const canAddMore = app.templateManager.canAddMoreTemplates();
+    
+    return {
+        pass: markedCount === 5 && canAddMore === false,
+        message: `Marked ${markedCount} templates, can add more: ${canAddMore}`
+    };
+}, 'template-integration');
+
+tf.addTest('Default Template Fallback', async () => {
+    const app = window.journal;
+    
+    // Test with 0 custom templates
+    app.entries.forEach(entry => {
+        if (entry.isTemplate) {
+            entry.isTemplate = false;
+            entry.templateOrder = null;
+        }
+    });
+    
+    let available = app.templateManager.getAvailableTemplates();
+    const with0Custom = available.length === 5 && available.filter(t => !t.isCustom).length === 2;
+    
+    // Test with 3 custom templates
+    for (let i = 0; i < 3 && i < app.entries.length; i++) {
+        app.templateManager.markAsTemplate(app.entries[i].id);
+    }
+    
+    available = app.templateManager.getAvailableTemplates();
+    const with3Custom = available.length === 5 && available.filter(t => t.isCustom).length === 3;
+    
+    return {
+        pass: with0Custom && with3Custom,
+        message: `0 custom: ${with0Custom}, 3 custom: ${with3Custom}`
+    };
+}, 'template-integration');
+
+tf.addTest('Backward Compatibility with Existing Entries', async () => {
+    const app = window.journal;
+    
+    // Simulate old entry without template fields
+    const oldEntry = {
+        id: 'test-old-entry',
+        content: 'Old entry content',
+        date: new Date().toISOString(),
+        wordCount: 3
+    };
+    
+    app.entries.push(oldEntry);
+    app.saveEntries();
+    
+    // Reload entries
+    const reloadedEntries = app.loadEntries();
+    const reloadedEntry = reloadedEntries.find(e => e.id === 'test-old-entry');
+    
+    return {
+        pass: reloadedEntry && 
+              reloadedEntry.isTemplate === false && 
+              reloadedEntry.templateOrder === null,
+        message: reloadedEntry ? 'Backward compatibility maintained' : 'Entry not found'
+    };
+}, 'template-integration');
+
+// UI Interaction Tests
+tf.addTest('Dropdown Open/Close Behavior', async () => {
+    const app = window.journal;
+    
+    const dropdown = document.getElementById('newEntryDropdown');
+    const newBtn = document.getElementById('newBtn');
+    
+    // Open dropdown
+    newBtn.click();
+    await tf.waitForCondition(() => dropdown.style.display === 'block', 500);
+    const opened = dropdown.style.display === 'block';
+    
+    // Close dropdown
+    app.closeTemplateDropdown();
+    await tf.waitForCondition(() => dropdown.style.display === 'none', 500);
+    const closed = dropdown.style.display === 'none';
+    
+    return {
+        pass: opened && closed,
+        message: `Opened: ${opened}, Closed: ${closed}`
+    };
+}, 'template-ui');
+
+tf.addTest('Keyboard Navigation in Dropdown', async () => {
+    const app = window.journal;
+    
+    const dropdown = document.getElementById('newEntryDropdown');
+    app.openTemplateDropdown();
+    await tf.waitForCondition(() => dropdown.style.display === 'block', 500);
+    
+    const options = dropdown.querySelectorAll('.template-option');
+    const hasOptions = options.length > 0;
+    const firstOptionFocusable = options[0] && typeof options[0].focus === 'function';
+    
+    app.closeTemplateDropdown();
+    
+    return {
+        pass: hasOptions && firstOptionFocusable,
+        message: `Options: ${options.length}, Focusable: ${firstOptionFocusable}`
+    };
+}, 'template-ui');
+
+tf.addTest('Template Toggle on Hover', async () => {
+    const app = window.journal;
+    
+    app.renderEntries();
+    await tf.waitForCondition(() => document.querySelector('.entry-item'), 500);
+    
+    const entryItem = document.querySelector('.entry-item');
+    const toggleBtn = entryItem?.querySelector('.entry-template-toggle');
+    
+    return {
+        pass: toggleBtn !== null && toggleBtn !== undefined,
+        message: toggleBtn ? 'Template toggle button present' : 'Toggle button not found'
+    };
+}, 'template-ui');
+
+tf.addTest('Filter Tab Switching', async () => {
+    const app = window.journal;
+    
+    const filterTabs = document.querySelectorAll('.filter-tab');
+    const allTab = Array.from(filterTabs).find(tab => tab.dataset.filter === 'all');
+    const templatesTab = Array.from(filterTabs).find(tab => tab.dataset.filter === 'templates');
+    
+    // Switch to templates
+    templatesTab?.click();
+    await tf.waitForCondition(() => app.currentFilter === 'templates', 500);
+    const switchedToTemplates = app.currentFilter === 'templates';
+    
+    // Switch back to all
+    allTab?.click();
+    await tf.waitForCondition(() => app.currentFilter === 'all', 500);
+    const switchedToAll = app.currentFilter === 'all';
+    
+    return {
+        pass: switchedToTemplates && switchedToAll,
+        message: `Switched to templates: ${switchedToTemplates}, Switched to all: ${switchedToAll}`
+    };
+}, 'template-ui');
+
+tf.addTest('Template Management Section', async () => {
+    const app = window.journal;
+    
+    const managementSection = document.getElementById('templateManagement');
+    const countDisplay = document.getElementById('templateCountText');
+    const listContainer = document.getElementById('templateListContainer');
+    
+    return {
+        pass: managementSection && countDisplay && listContainer,
+        message: 'Template management section elements present'
+    };
+}, 'template-ui');
