@@ -99,6 +99,225 @@ class SidebarManager {
     }
 }
 
+// Template Manager Class - Handles entry templates and template management
+class TemplateManager {
+    constructor(journal) {
+        this.journal = journal;
+        this.maxTemplates = 5;
+        this.defaultTemplates = this.initializeDefaultTemplates();
+    }
+
+    initializeDefaultTemplates() {
+        return [
+            {
+                id: 'default-six-fs',
+                name: 'Six F\'s Framework',
+                icon: '📋',
+                content: `# Six F's Reflection
+
+## Facts
+What happened today? What are the objective events?
+
+
+## Feelings
+How did I feel about these events? What emotions came up?
+
+
+## Findings
+What did I learn or discover? What patterns do I notice?
+
+
+## Future
+What do I want to do differently? What are my next steps?
+
+
+## Feedback
+What feedback did I receive or give? How can I grow from it?
+
+
+## Fun
+What brought me joy today? What am I grateful for?
+
+`
+            },
+            {
+                id: 'default-checkin',
+                name: 'Basic Check-in',
+                icon: '📋',
+                content: `# Daily Check-in
+
+## How am I feeling right now?
+
+
+## What's on my mind?
+
+
+## What went well today?
+
+
+## What could have gone better?
+
+
+## What am I looking forward to?
+
+`
+            }
+        ];
+    }
+
+    getAvailableTemplates() {
+        // Get custom templates sorted by order
+        const customTemplates = this.getTemplateEntries()
+            .sort((a, b) => a.templateOrder - b.templateOrder)
+            .map(entry => ({
+                id: entry.id,
+                name: entry.title || this.truncateText(entry.content, 30),
+                icon: '📌',
+                content: entry.content,
+                isCustom: true
+            }));
+
+        // Calculate how many default templates to show
+        const availableSlots = this.maxTemplates - customTemplates.length;
+        const defaultsToShow = this.defaultTemplates.slice(0, Math.max(0, availableSlots));
+
+        return [...customTemplates, ...defaultsToShow];
+    }
+
+    getTemplateEntries() {
+        return this.journal.entries.filter(entry => entry.isTemplate === true);
+    }
+
+    canAddMoreTemplates() {
+        return this.getTemplateEntries().length < this.maxTemplates;
+    }
+
+    markAsTemplate(entryId) {
+        if (!this.canAddMoreTemplates()) {
+            this.journal.themeManager.showToast(
+                'Template limit reached (5 max)',
+                'warning',
+                '⚠️'
+            );
+            return false;
+        }
+
+        const entry = this.journal.entries.find(e => e.id === entryId);
+        if (!entry) {
+            console.error('Entry not found:', entryId);
+            return false;
+        }
+
+        // Find next available template order
+        const existingOrders = this.getTemplateEntries()
+            .map(e => e.templateOrder)
+            .filter(order => order !== null);
+        
+        let nextOrder = 0;
+        while (existingOrders.includes(nextOrder) && nextOrder < this.maxTemplates) {
+            nextOrder++;
+        }
+
+        // Mark as template
+        entry.isTemplate = true;
+        entry.templateOrder = nextOrder;
+
+        this.journal.saveEntries();
+        this.journal.renderEntries();
+
+        this.journal.themeManager.showToast(
+            'Entry marked as template',
+            'success',
+            '📌'
+        );
+
+        // Track analytics
+        this.journal.analytics.trackFeatureUse('template', 'created');
+
+        return true;
+    }
+
+    unmarkAsTemplate(entryId) {
+        const entry = this.journal.entries.find(e => e.id === entryId);
+        if (!entry) {
+            console.error('Entry not found:', entryId);
+            return false;
+        }
+
+        // Unmark as template
+        entry.isTemplate = false;
+        entry.templateOrder = null;
+
+        this.journal.saveEntries();
+        this.journal.renderEntries();
+
+        this.journal.themeManager.showToast(
+            'Template removed',
+            'info',
+            '📌'
+        );
+
+        return true;
+    }
+
+    createEntryFromTemplate(templateId) {
+        let templateContent = '';
+        let templateName = '';
+
+        // Check if it's a default template
+        const defaultTemplate = this.defaultTemplates.find(t => t.id === templateId);
+        if (defaultTemplate) {
+            templateContent = defaultTemplate.content;
+            templateName = defaultTemplate.name;
+        } else {
+            // It's a custom template
+            const customTemplate = this.journal.entries.find(e => e.id === templateId);
+            if (customTemplate) {
+                templateContent = customTemplate.content;
+                templateName = customTemplate.title || 'Custom Template';
+            } else {
+                this.journal.themeManager.showToast(
+                    'Template not found',
+                    'error',
+                    '❌'
+                );
+                return;
+            }
+        }
+
+        // Create new entry with template content
+        this.journal.textarea.value = templateContent;
+        this.journal.currentEntryId = null; // New entry
+        this.journal.updateWordCount();
+        
+        // Mark as template content (ephemeral until edited)
+        this.journal.isTemplateContent = true;
+        this.journal.templateContentOriginal = templateContent;
+        
+        this.journal.textarea.focus();
+
+        // Don't auto-save - wait for user to edit
+        // Clear any pending auto-save
+        if (this.journal.saveTimeout) {
+            clearTimeout(this.journal.saveTimeout);
+        }
+
+        this.journal.themeManager.showToast(
+            `Created from ${templateName}`,
+            'success',
+            '✨'
+        );
+
+        // Track analytics
+        this.journal.analytics.trackFeatureUse('template', 'used');
+    }
+
+    truncateText(text, maxLength) {
+        if (text.length <= maxLength) return text;
+        return text.substring(0, maxLength).trim() + '...';
+    }
+}
+
 // Theme Manager Class - Handles theme switching and customization
 class ThemeManager {
     constructor() {
@@ -898,6 +1117,10 @@ class SimpleJournal {
         this.aiService = new AIService();
         this.themeManager = new ThemeManager();
         this.analytics = new PrivacyAnalytics();
+        this.templateManager = new TemplateManager(this); // Initialize template manager
+        this.currentFilter = 'all'; // 'all' or 'templates'
+        this.isTemplateContent = false; // Track if current content is from template
+        this.templateContentOriginal = null; // Store original template content
         
         // Set up analytics callbacks
         this.themeManager.onThemeChange = (theme, mode) => {
@@ -972,13 +1195,31 @@ class SimpleJournal {
 
         // Buttons
         this.newBtn = document.getElementById('newBtn');
+        this.templateDropdownBtn = document.getElementById('templateDropdownBtn');
+        this.newEntryDropdown = document.getElementById('newEntryDropdown');
         this.floatingNewBtn = document.getElementById('floatingNewBtn');
+        
+        // Debug: Check if template dropdown button exists
+        if (!this.templateDropdownBtn) {
+            console.error('Template dropdown button not found!');
+        } else {
+            console.log('Template dropdown button found:', this.templateDropdownBtn);
+        }
         this.exportBtn = document.getElementById('exportBtn');
         this.importBtn = document.getElementById('importBtn');
         this.importFile = document.getElementById('importFile');
         this.aiChatBtn = document.getElementById('aiChatBtn');
         this.aiStatus = document.getElementById('aiStatus');
         this.aiCapabilities = document.getElementById('aiCapabilities');
+
+        // Template filter elements
+        this.filterTabs = document.querySelectorAll('.filter-tab');
+        this.templateCount = document.getElementById('templateCount');
+
+        // Template management elements
+        this.templateManagement = document.getElementById('templateManagement');
+        this.templateCountText = document.getElementById('templateCountText');
+        this.templateListContainer = document.getElementById('templateListContainer');
 
         // Entry summary elements removed - no longer using summarization
 
@@ -999,6 +1240,9 @@ class SimpleJournal {
 
         // Initialize AI model selector
         this.initializeModelSelector();
+
+        // Initialize template dropdown
+        this.initializeTemplateDropdown();
     }
 
     setupEventListeners() {
@@ -1014,6 +1258,14 @@ class SimpleJournal {
         // Textarea
         this.textarea.addEventListener('input', () => {
             this.updateWordCount();
+            
+            // Check if this is the first edit of template content
+            if (this.isTemplateContent) {
+                // User has started editing the template
+                this.isTemplateContent = false;
+                this.templateContentOriginal = null;
+            }
+            
             this.autoSave();
 
             // Add typing indicator
@@ -1034,8 +1286,9 @@ class SimpleJournal {
         });
 
         // Buttons
-        this.newBtn.addEventListener('click', () => this.newEntry());
-        this.floatingNewBtn.addEventListener('click', () => this.newEntry());
+        this.newBtn.addEventListener('click', () => this.createBlankEntry());
+        this.templateDropdownBtn.addEventListener('click', (e) => this.toggleTemplateDropdown(e));
+        this.floatingNewBtn.addEventListener('click', () => this.createBlankEntry());
         this.exportBtn.addEventListener('click', () => this.exportEntries());
         this.importBtn.addEventListener('click', () => this.importFile.click());
         this.importFile.addEventListener('change', (e) => this.handleImport(e));
@@ -1055,6 +1308,18 @@ class SimpleJournal {
 
         // Search
         this.searchInput.addEventListener('input', () => this.filterEntries());
+
+        // Template filter tabs
+        this.filterTabs.forEach(tab => {
+            tab.addEventListener('click', () => this.switchFilter(tab.dataset.filter));
+        });
+
+        // Close dropdown when clicking outside
+        document.addEventListener('click', (e) => {
+            if (!e.target.closest('.new-entry-container')) {
+                this.closeTemplateDropdown();
+            }
+        });
 
         // Keyboard shortcuts
         document.addEventListener('keydown', (e) => {
@@ -1183,16 +1448,19 @@ class SimpleJournal {
         if (entry) {
             this.textarea.value = entry.content;
             this.currentEntryId = entry.id;
+            this.isTemplateContent = false;
+            this.templateContentOriginal = null;
             this.updateWordCount();
             this.textarea.focus();
-
-
         }
     }
 
     renderEntries() {
         const filteredEntries = this.getFilteredEntries();
         const emptyState = document.getElementById('emptyState');
+
+        // Update template count
+        this.updateTemplateCount();
 
         if (filteredEntries.length === 0) {
             if (this.entries.length === 0) {
@@ -1201,6 +1469,13 @@ class SimpleJournal {
                     <div class="empty-icon">📝</div>
                     <p>No entries yet</p>
                     <span>Start writing to see your entries here</span>
+                `;
+            } else if (this.currentFilter === 'templates') {
+                // No templates
+                emptyState.innerHTML = `
+                    <div class="empty-icon">📌</div>
+                    <p>No templates yet</p>
+                    <span>Mark an entry as a template to see it here</span>
                 `;
             } else {
                 // No search results
@@ -1248,9 +1523,21 @@ class SimpleJournal {
                     <div class="entry-preview">${this.truncateText(entry.content, 60)}</div>` :
                     `<div class="entry-preview">${this.truncateText(entry.content, 100)}</div>`;
 
+                // Template indicator
+                const templateIndicator = entry.isTemplate ? 
+                    `<span class="entry-template-indicator" title="Template">📌</span>` : '';
+
                 div.innerHTML = `
                     <div class="entry-header">
+                        ${templateIndicator}
                         <div class="entry-actions">
+                            <button class="entry-template-toggle ${entry.isTemplate ? 'active' : ''}" 
+                                    data-entry-id="${entry.id}" 
+                                    title="${entry.isTemplate ? 'Remove from templates' : 'Mark as template'}"
+                                    aria-label="${entry.isTemplate ? 'Remove from templates' : 'Mark as template'}"
+                                    aria-pressed="${entry.isTemplate}">
+                                📌
+                            </button>
                             <button class="entry-delete-btn" data-entry-id="${entry.id}" title="Delete entry">×</button>
                         </div>
                     </div>
@@ -1260,9 +1547,17 @@ class SimpleJournal {
                 // Add click handler for loading entry (but not on action buttons)
                 div.addEventListener('click', (e) => {
                     if (!e.target.classList.contains('entry-delete-btn') &&
-                        !e.target.classList.contains('entry-title-remove')) {
+                        !e.target.classList.contains('entry-title-remove') &&
+                        !e.target.classList.contains('entry-template-toggle')) {
                         this.loadEntry(entry.id);
                     }
+                });
+
+                // Add template toggle handler
+                const templateToggle = div.querySelector('.entry-template-toggle');
+                templateToggle.addEventListener('click', (e) => {
+                    e.stopPropagation();
+                    this.toggleEntryTemplate(entry.id);
                 });
 
                 // Add delete handler
@@ -1329,13 +1624,23 @@ class SimpleJournal {
     }
 
     getFilteredEntries() {
-        const query = this.searchInput.value.toLowerCase().trim();
-        if (!query) return this.entries;
+        let filtered = this.entries;
 
-        return this.entries.filter(entry =>
-            entry.content.toLowerCase().includes(query) ||
-            new Date(entry.date).toLocaleDateString().includes(query)
-        );
+        // Apply template filter
+        if (this.currentFilter === 'templates') {
+            filtered = filtered.filter(entry => entry.isTemplate === true);
+        }
+
+        // Apply search filter
+        const query = this.searchInput.value.toLowerCase().trim();
+        if (query) {
+            filtered = filtered.filter(entry =>
+                entry.content.toLowerCase().includes(query) ||
+                new Date(entry.date).toLocaleDateString().includes(query)
+            );
+        }
+
+        return filtered;
     }
 
     filterEntries() {
@@ -1402,7 +1707,14 @@ class SimpleJournal {
     loadEntries() {
         try {
             const stored = localStorage.getItem('simpleJournalEntries');
-            return stored ? JSON.parse(stored) : [];
+            const entries = stored ? JSON.parse(stored) : [];
+            
+            // Ensure backward compatibility - add template fields if missing
+            return entries.map(entry => ({
+                ...entry,
+                isTemplate: entry.isTemplate || false,
+                templateOrder: entry.templateOrder || null
+            }));
         } catch (error) {
             console.error('Error loading entries:', error);
             return [];
@@ -1865,6 +2177,222 @@ What do I think about these insights? How do they resonate with my experience? W
                 this.modelDropdownBtn.style.transform = 'rotate(0deg)';
             }
         });
+    }
+
+    // Template dropdown methods
+    initializeTemplateDropdown() {
+        this.updateTemplateDropdown();
+        this.updateTemplateCount();
+    }
+
+    updateTemplateDropdown() {
+        if (!this.newEntryDropdown) return;
+
+        const templates = this.templateManager.getAvailableTemplates();
+        
+        this.newEntryDropdown.innerHTML = templates.map(template => `
+            <div class="template-option" data-template-id="${template.id}" role="menuitem" tabindex="0">
+                <span class="template-option-icon">${template.icon}</span>
+                <span class="template-option-label">${template.name}</span>
+            </div>
+        `).join('');
+
+        // Add click handlers to options
+        this.newEntryDropdown.querySelectorAll('.template-option').forEach(option => {
+            option.addEventListener('click', () => {
+                const templateId = option.dataset.templateId;
+                this.templateManager.createEntryFromTemplate(templateId);
+                this.closeTemplateDropdown();
+            });
+        });
+
+        // Add keyboard navigation
+        this.setupDropdownKeyboardNav();
+    }
+
+    setupDropdownKeyboardNav() {
+        if (!this.newEntryDropdown) return;
+
+        this.newEntryDropdown.addEventListener('keydown', (e) => {
+            const options = Array.from(this.newEntryDropdown.querySelectorAll('.template-option'));
+            const currentIndex = options.findIndex(opt => opt === document.activeElement);
+
+            switch(e.key) {
+                case 'ArrowDown':
+                    e.preventDefault();
+                    const nextIndex = (currentIndex + 1) % options.length;
+                    options[nextIndex].focus();
+                    break;
+                case 'ArrowUp':
+                    e.preventDefault();
+                    const prevIndex = currentIndex <= 0 ? options.length - 1 : currentIndex - 1;
+                    options[prevIndex].focus();
+                    break;
+                case 'Enter':
+                    e.preventDefault();
+                    if (currentIndex >= 0) {
+                        options[currentIndex].click();
+                    }
+                    break;
+                case 'Escape':
+                    e.preventDefault();
+                    this.closeTemplateDropdown();
+                    this.newBtn.focus();
+                    break;
+            }
+        });
+    }
+
+    toggleTemplateDropdown(e) {
+        e.stopPropagation();
+        const isVisible = this.newEntryDropdown.style.display !== 'none';
+        
+        if (isVisible) {
+            this.closeTemplateDropdown();
+        } else {
+            this.openTemplateDropdown();
+        }
+    }
+
+    openTemplateDropdown() {
+        this.updateTemplateDropdown();
+        this.newEntryDropdown.style.display = 'block';
+        this.templateDropdownBtn.setAttribute('aria-expanded', 'true');
+        this.templateDropdownBtn.classList.add('open');
+        
+        // Focus first option
+        setTimeout(() => {
+            const firstOption = this.newEntryDropdown.querySelector('.template-option');
+            if (firstOption) {
+                firstOption.focus();
+            }
+        }, 10);
+    }
+
+    closeTemplateDropdown() {
+        if (this.newEntryDropdown) {
+            this.newEntryDropdown.style.display = 'none';
+            this.templateDropdownBtn.setAttribute('aria-expanded', 'false');
+            this.templateDropdownBtn.classList.remove('open');
+        }
+    }
+
+    createBlankEntry() {
+        this.textarea.value = '';
+        this.currentEntryId = null;
+        this.isTemplateContent = false;
+        this.templateContentOriginal = null;
+        this.updateWordCount();
+        this.textarea.focus();
+        
+        // Track new entry creation (no content tracked)
+        this.analytics.trackFeatureUse('new_entry', 'created');
+    }
+
+    updateTemplateCount() {
+        const count = this.templateManager.getTemplateEntries().length;
+        
+        if (this.templateCount) {
+            this.templateCount.textContent = count;
+        }
+        
+        if (this.templateCountText) {
+            this.templateCountText.textContent = `${count} of 5 slots used`;
+        }
+        
+        this.updateTemplateManagementList();
+    }
+
+    updateTemplateManagementList() {
+        if (!this.templateListContainer) return;
+
+        const customTemplates = this.templateManager.getTemplateEntries()
+            .sort((a, b) => a.templateOrder - b.templateOrder);
+        
+        const availableTemplates = this.templateManager.getAvailableTemplates();
+        const defaultTemplates = availableTemplates.filter(t => !t.isCustom);
+
+        let html = '';
+
+        if (customTemplates.length > 0) {
+            html += '<div class="template-list-section"><div class="template-list-header">Custom Templates:</div><div class="template-list">';
+            customTemplates.forEach(entry => {
+                const name = entry.title || this.truncateText(entry.content, 30);
+                html += `
+                    <div class="template-list-item clickable" data-template-id="${entry.id}" title="Click to create new entry from this template">
+                        <span class="template-list-name">📌 ${name}</span>
+                        <button class="template-remove-btn" data-entry-id="${entry.id}" title="Remove template">×</button>
+                    </div>
+                `;
+            });
+            html += '</div></div>';
+        }
+
+        if (defaultTemplates.length > 0) {
+            html += '<div class="template-list-section"><div class="template-list-header">Default Templates:</div><div class="template-list">';
+            defaultTemplates.forEach(template => {
+                html += `
+                    <div class="template-list-item clickable" data-template-id="${template.id}" title="Click to create new entry from this template">
+                        <span class="template-list-name">${template.icon} ${template.name}</span>
+                    </div>
+                `;
+            });
+            html += '</div></div>';
+        }
+
+        this.templateListContainer.innerHTML = html;
+
+        // Add click handlers to template items
+        this.templateListContainer.querySelectorAll('.template-list-item.clickable').forEach(item => {
+            item.addEventListener('click', (e) => {
+                // Don't trigger if clicking the remove button
+                if (e.target.classList.contains('template-remove-btn')) {
+                    return;
+                }
+                const templateId = item.dataset.templateId;
+                this.templateManager.createEntryFromTemplate(templateId);
+            });
+        });
+
+        // Add event listeners to remove buttons
+        this.templateListContainer.querySelectorAll('.template-remove-btn').forEach(btn => {
+            btn.addEventListener('click', (e) => {
+                e.stopPropagation(); // Prevent triggering the item click
+                const entryId = btn.dataset.entryId;
+                this.templateManager.unmarkAsTemplate(entryId);
+                this.updateTemplateCount();
+                this.updateTemplateDropdown();
+            });
+        });
+    }
+
+    switchFilter(filter) {
+        this.currentFilter = filter;
+        
+        // Update active tab
+        this.filterTabs.forEach(tab => {
+            tab.classList.toggle('active', tab.dataset.filter === filter);
+        });
+        
+        // Re-render entries with filter
+        this.renderEntries();
+    }
+
+    toggleEntryTemplate(entryId) {
+        const entry = this.entries.find(e => e.id === entryId);
+        if (!entry) return;
+
+        if (entry.isTemplate) {
+            // Unmark as template
+            this.templateManager.unmarkAsTemplate(entryId);
+        } else {
+            // Mark as template
+            this.templateManager.markAsTemplate(entryId);
+        }
+
+        // Update template count and dropdown
+        this.updateTemplateCount();
+        this.updateTemplateDropdown();
     }
 }
 
